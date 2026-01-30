@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import streamlit as st
 
+
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
@@ -15,11 +16,15 @@ from sklearn.linear_model import (
     LinearRegression,
     RidgeCV,
     LassoCV,
-    ElasticNetCV,
+    ElasticNetCV,   
 )
+from sklearn.compose import TransformedTargetRegressor
 from sklearn.metrics import r2_score, mean_squared_error, root_mean_squared_error
 import statsmodels.api as sm
 from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.preprocessing import PolynomialFeatures
+import os
+
 
 class StatsmodelsOLS(BaseEstimator, RegressorMixin):
     def __init__(self):
@@ -45,19 +50,13 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 
 feature_cols_default = [
     "views",
-    "likes",
     "comments",
-    "watch_time_minutes",
     "video_length_minutes",
     "subscribers",
     "category",
     "device",
     "country",
-    "likes_per_view",
-    "comments_per_view",
-    "engagement_rate",
-    "watch_time_per_view",
-    "retention_rate",
+    "retention_volume",
 ]
 target_col_default = "ad_revenue_usd"
 
@@ -66,6 +65,7 @@ target_col_default = "ad_revenue_usd"
 # -----------------------------------------------------------------------------
 @st.cache_data
 def get_dataset(uploaded_file=None, impute_mode="Drop rows"):
+
     if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
     elif os.path.exists("youtube_ad_revenue_dataset.csv"):
@@ -117,6 +117,7 @@ def get_dataset(uploaded_file=None, impute_mode="Drop rows"):
     # watch_time_minutes is total watch time.
     df["watch_time_per_view"] = df["watch_time_minutes"] / df["views"].replace(0, 1)
     df["retention_rate"] = df["watch_time_per_view"] / df["video_length_minutes"].replace(0, 1)
+    df["retention_volume"] = df["retention_rate"] * df["views"]
     
     return df
 
@@ -130,6 +131,7 @@ def train_pipeline(df, feature_cols, target_col):
 
     preprocessor = ColumnTransformer(
         transformers=[
+            ("poly", PolynomialFeatures(degree=2, include_bias=False), numeric_features),
             ("num", StandardScaler(), numeric_features),
             ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), categorical_features),
         ],
@@ -142,7 +144,13 @@ def train_pipeline(df, feature_cols, target_col):
 
     alphas = np.logspace(-3, 3, 30)
 
-    linreg = make_pipeline(preprocessor, LinearRegression())
+    model_logic = LinearRegression() # or RidgeCV()
+    wrapped_model = TransformedTargetRegressor(
+        regressor=model_logic, 
+        func=np.log1p,         # Log transform for training
+        inverse_func=np.expm1 # Convert back to dollars for evaluation
+    )
+    linreg = make_pipeline(preprocessor, wrapped_model)
     ridge_pipe = make_pipeline(preprocessor, RidgeCV(alphas=alphas, cv=5))
     lasso_pipe = make_pipeline(preprocessor, LassoCV(alphas=alphas, cv=5, random_state=42))
     elastic_pipe = make_pipeline(
