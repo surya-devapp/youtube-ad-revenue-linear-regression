@@ -19,11 +19,19 @@ from sklearn.linear_model import (
     ElasticNetCV,   
 )
 from sklearn.compose import TransformedTargetRegressor
-from sklearn.metrics import r2_score, mean_squared_error, root_mean_squared_error
+from sklearn.metrics import r2_score, mean_squared_error, root_mean_squared_error, mean_absolute_error
 import statsmodels.api as sm
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.preprocessing import PolynomialFeatures
 import os
+
+
+
+
+
+
+
+
 
 
 class StatsmodelsOLS(BaseEstimator, RegressorMixin):
@@ -73,8 +81,23 @@ def get_dataset(uploaded_file=None, impute_mode="Drop rows"):
     else:
         return None
     
+    # Duplicate removal (Requirement: Remove ~2% duplicates)
+    # Data Reduction Tracking
+    stats = {}
+    stats["Original Rows"] = len(df)
+    
+    # Duplicate removal
+    df = df.drop_duplicates()
+    stats["After Duplicates Removal"] = len(df)
+    
+    # Track Nulls (before imputation/drop)
+    null_counts = df.isnull().sum()
+    stats["Null Counts"] = null_counts[null_counts > 0].to_dict()
+    
     if impute_mode == "Drop rows":
+        # Drop nulls
         df = df.dropna()
+        stats["After Drop Nulls"] = len(df)
     else:
         # Imputation
         for col in df.columns:
@@ -99,13 +122,11 @@ def get_dataset(uploaded_file=None, impute_mode="Drop rows"):
             # Apply KNN to numeric columns
             numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
             if len(numeric_cols) > 0:
-                # Use a small sample if dataset is too large to avoid timeout, or just run it
-                # For >100k rows, KNN is slow. We'll limit to 10k sample for fitting if needed, 
-                # but here we want to impute ALL. 
-                # Optimization: Use a smaller n_neighbors
                 imputer = KNNImputer(n_neighbors=3)
-                # This might take a while
                 df[numeric_cols] = imputer.fit_transform(df[numeric_cols])
+        
+        # In imputation mode, "final" is just current length (usually same as original)
+        stats["After Drop Nulls"] = len(df) 
     
     # Feature Engineering
     # Ratios
@@ -119,7 +140,11 @@ def get_dataset(uploaded_file=None, impute_mode="Drop rows"):
     df["retention_rate"] = df["watch_time_per_view"] / df["video_length_minutes"].replace(0, 1)
     df["retention_volume"] = df["retention_rate"] * df["views"]
     
-    return df
+    return df, stats
+
+@st.cache_resource
+def train_pipeline(df, feature_cols, target_col):
+    X = df[feature_cols]
 
 @st.cache_resource
 def train_pipeline(df, feature_cols, target_col):
@@ -183,6 +208,11 @@ def train_pipeline(df, feature_cols, target_col):
             "Train RMSE": root_mean_squared_error(y_train, y_pred_train),
             "Test RMSE": root_mean_squared_error(y_test, y_pred_test),
             "y_pred_train": y_pred_train,
+            "Train RMSE": root_mean_squared_error(y_train, y_pred_train),
+            "Test RMSE": root_mean_squared_error(y_test, y_pred_test),
+            "Train MAE": mean_absolute_error(y_train, y_pred_train),
+            "Test MAE": mean_absolute_error(y_test, y_pred_test),
+            "y_pred_train": y_pred_train,
             "y_pred_test": y_pred_test,
         })
 
@@ -214,24 +244,15 @@ def train_pipeline(df, feature_cols, target_col):
         "Train RMSE": root_mean_squared_error(y_train, y_pred_train_ols),
         "Test RMSE": root_mean_squared_error(y_test, y_pred_test_ols),
         "y_pred_train": y_pred_train_ols,
+        "Train RMSE": root_mean_squared_error(y_train, y_pred_train_ols),
+        "Test RMSE": root_mean_squared_error(y_test, y_pred_test_ols),
+        "Train MAE": mean_absolute_error(y_train, y_pred_train_ols),
+        "Test MAE": mean_absolute_error(y_test, y_pred_test_ols),
+        "y_pred_train": y_pred_train_ols,
         "y_pred_test": y_pred_test_ols,
     })
 
-    gamma_log = sm.GLM(y_train, X_train_sm, family=sm.families.Gamma(sm.families.links.log()))
-    gamma_res = gamma_log.fit()
-    y_pred_train_glm = gamma_res.predict(X_train_sm)
-    y_pred_test_glm = gamma_res.predict(X_test_sm)
-    results.append({
-        "Model": "Gamma GLM (log)",
-        "Train R2": r2_score(y_train, y_pred_train_glm),
-        "Test R2": r2_score(y_test, y_pred_test_glm),
-        "CV R2 (Mean)": np.nan,
-        "CV R2 (Std)": np.nan,
-        "Train RMSE": root_mean_squared_error(y_train, y_pred_train_glm),
-        "Test RMSE": root_mean_squared_error(y_test, y_pred_test_glm),
-        "y_pred_train": y_pred_train_glm,
-        "y_pred_test": y_pred_test_glm,
-    })
+
 
     # Auto-save
     joblib.dump(linreg, os.path.join(MODELS_DIR, "linreg.pkl"))
@@ -239,12 +260,12 @@ def train_pipeline(df, feature_cols, target_col):
     joblib.dump(lasso_pipe, os.path.join(MODELS_DIR, "lasso.pkl"))
     joblib.dump(elastic_pipe, os.path.join(MODELS_DIR, "elasticnet.pkl"))
     ols_model.save(os.path.join(MODELS_DIR, "ols_sm.pickle"))
-    gamma_res.save(os.path.join(MODELS_DIR, "gamma_glm.pickle"))
+
     joblib.dump(feature_cols, os.path.join(MODELS_DIR, "feature_cols.pkl"))
     joblib.dump(preprocessor, os.path.join(MODELS_DIR, "preprocessor.pkl"))
     joblib.dump(X.iloc[:5], os.path.join(MODELS_DIR, "X_sample.pkl"))
 
-    return results, models_sklearn, ols_model, gamma_res, preprocessor, X_train, X_test, y_train, y_test
+    return results, models_sklearn, ols_model, preprocessor, X_train, X_test, y_train, y_test
 
 
 import plotly.express as px
@@ -291,7 +312,7 @@ def plot_section(y_true, y_pred, title_prefix, indices=None):
             title=f"{title_prefix}: Residuals vs Predicted"
         )
         fig2.add_hline(y=0, line_dash="dash", line_color="red")
-        fig2.update_yaxes(range=[-0.5, 0.5])
+        #fig2.update_yaxes(range=[-0.5, 0.5])
         st.plotly_chart(fig2, use_container_width=True)
 
     # Residual Distribution
@@ -330,6 +351,17 @@ def plot_section(y_true, y_pred, title_prefix, indices=None):
     )
     st.plotly_chart(fig4, use_container_width=True)
 
+    # Distribution Comparison (Actual vs Predicted)
+    st.markdown(f"**{title_prefix}: Distribution of Actual vs Predicted**")
+    # visualising the distribution of the actual and predicted values
+    # using a histogram to see how well the model captures the data distribution
+    
+    fig5 = go.Figure()
+    fig5.add_trace(go.Histogram(x=y_true, name="Actual", opacity=0.6, marker_color='blue'))
+    fig5.add_trace(go.Histogram(x=y_pred, name="Predicted", opacity=0.6, marker_color='orange'))
+    fig5.update_layout(barmode='overlay', title=f"{title_prefix}: Actual vs Predicted Distribution")
+    st.plotly_chart(fig5, use_container_width=True)
+
 
 # -----------------------------------------------------------------------------
 # SIDEBAR NAVIGATION
@@ -346,14 +378,41 @@ if page == "1. Train & Evaluate":
     st.sidebar.header("Data options")
     uploaded_file = st.sidebar.file_uploader("Upload CSV (Optional)", type="csv")
     
-    impute_mode = st.sidebar.radio(
-        "Missing Value Handling", 
-        ["Drop rows", "Fill with mean", "Fill with median", "Fill with 0", "KNN Imputation"], 
-        index=0, 
-        help="KNN Imputation: Uses K-Nearest Neighbors to estimate missing values (slower)."
-    )
+    impute_mode = "Drop rows"
     
-    df = get_dataset(uploaded_file, impute_mode)
+    df_result = get_dataset(uploaded_file, impute_mode)
+    if df_result is None: # Handle case where file not found or returned None
+        st.info("Upload a CSV to begin.")
+        st.stop()
+    
+    # Handle tuple unpack (df, stats)
+    if isinstance(df_result, tuple):
+        df, stats = df_result
+        
+        # Display Data Processing Stats if available
+        if stats:
+             st.write("### Data Processing Stats")
+             duplicates_removed = stats.get("Original Rows", 0) - stats.get("After Duplicates Removal", 0)
+             total_removed = stats.get("Original Rows", 0) - stats.get("After Drop Nulls", 0)
+             reduction_pct = (total_removed / stats.get("Original Rows", 1)) * 100
+             
+             col1, col2, col3, col4 = st.columns(4)
+             col1.metric("Original", f"{stats.get('Original Rows', 0):,}")
+             col2.metric("After Dupes", f"{stats.get('After Duplicates Removal', 0):,}", delta=f"-{duplicates_removed}")
+             col3.metric("Final (Clean)", f"{stats.get('After Drop Nulls', 0):,}", delta=f"-{stats.get('After Duplicates Removal', 0) - stats.get('After Drop Nulls', 0)}")
+             col4.metric("Total Reduction", f"{reduction_pct:.1f}%", delta=f"-{total_removed} rows", delta_color="inverse")
+             
+             if duplicates_removed > 0:
+                  st.toast(f"Removed {duplicates_removed} duplicate rows.", icon="🧹")
+             
+             # Show Null Counts if any
+             null_counts = stats.get("Null Counts", {})
+             if null_counts:
+                 st.caption("Rows with Null Values (by Column):")
+                 st.dataframe(pd.DataFrame(list(null_counts.items()), columns=["Column", "Null Count"]).set_index("Column").T)
+    else:
+        df = df_result # Fallback for legacy behavior
+
     if df is None:
         st.info("Upload a CSV to begin.")
         st.stop()
@@ -406,13 +465,22 @@ if page == "1. Train & Evaluate":
     sns.histplot(df[target_col], kde=True, ax=ax_dist)
     st.pyplot(fig_dist)
 
+    # Outlier Detection (Boxplots)
+    st.markdown("**Outlier Detection (Boxplots)**")
+    numeric_cols = numeric_df.columns
+    # Allow user to select column to visualize outliers
+    box_col = st.selectbox("Select column for Outlier check", numeric_cols)
+    fig_box, ax_box = plt.subplots(figsize=(10, 2))
+    sns.boxplot(x=df[box_col], ax=ax_box, color="orange")
+    st.pyplot(fig_box)
+
 
     # 2. Preprocessing & Split & Train
     # -------------------------------------------------------------------------
     st.subheader("2. Model Training")
     
     with st.spinner("Training models..."):
-        results, models_sklearn, ols_model, gamma_res, preprocessor, X_train, X_test, y_train, y_test = train_pipeline(df, feature_cols, target_col)
+        results, models_sklearn, ols_model, preprocessor, X_train, X_test, y_train, y_test = train_pipeline(df, feature_cols, target_col)
     
     st.success("Models trained and saved automatically.")
 
@@ -428,6 +496,8 @@ if page == "1. Train & Evaluate":
                 "Test R2": r["Test R2"],
                 "Train RMSE": r["Train RMSE"],
                 "Test RMSE": r["Test RMSE"],
+                "Train MAE": r["Train MAE"],
+                "Test MAE": r["Test MAE"],
             }
             for r in results
         ]
@@ -440,7 +510,10 @@ if page == "1. Train & Evaluate":
                 "CV R2 (Std)": "{:.3f}",
                 "Test R2": "{:.3f}",
                 "Train RMSE": "{:.3f}",
+                "Train RMSE": "{:.3f}",
                 "Test RMSE": "{:.3f}",
+                "Train MAE": "{:.3f}",
+                "Test MAE": "{:.3f}",
             }
         )
     )
@@ -488,7 +561,7 @@ if page == "1. Train & Evaluate":
         "Lasso": "lasso.pkl",
         "Elastic Net": "elasticnet.pkl",
         "OLS (statsmodels)": "ols_sm.pickle",
-        "Gamma GLM (log)": "gamma_glm.pickle",
+
     }
     
     with col_d3:
@@ -544,7 +617,16 @@ else:
     st.title("Predict Ad Revenue")
 
     # Load models
+    # Load data
     try:
+        # We don't need stats here really, just the df to get columns/types if needed
+        # Or we load from cache (which now returns tuple)
+        df_result = get_dataset(None, "Drop rows") 
+        if isinstance(df_result, tuple):
+            df_loaded, _ = df_result
+        else:
+            df_loaded = df_result
+            
         feature_cols = joblib.load(os.path.join(MODELS_DIR, "feature_cols.pkl"))
         # We don't strictly need train_data.pkl for prediction if we have the preprocessor
         # But we might use it for stats
@@ -553,7 +635,7 @@ else:
         lasso_pipe = joblib.load(os.path.join(MODELS_DIR, "lasso.pkl"))
         elastic_pipe = joblib.load(os.path.join(MODELS_DIR, "elasticnet.pkl"))
         ols_model = sm.load(os.path.join(MODELS_DIR, "ols_sm.pickle"))
-        gamma_res = sm.load(os.path.join(MODELS_DIR, "gamma_glm.pickle"))
+
         preprocessor = joblib.load(os.path.join(MODELS_DIR, "preprocessor.pkl"))
         X_sample = joblib.load(os.path.join(MODELS_DIR, "X_sample.pkl"))
     except Exception as e:
@@ -566,7 +648,7 @@ else:
         "Lasso": lasso_pipe,
         "Elastic Net": elastic_pipe,
         "OLS (statsmodels)": ols_model,
-        "Gamma GLM (log)": gamma_res,
+
     }
 
     mode = st.sidebar.radio("Input type", ["Single input", "CSV upload"])
@@ -578,19 +660,48 @@ else:
 
     st.markdown("### Input features")
 
+    # Helper function to compute engineered features (Defined here to be used in both modes)
+    def add_engineered_features(d):
+        # Safe division helper
+        def safe_div(a, b):
+            return a / b if b != 0 else 0
+        
+        d["likes_per_view"] = d.apply(lambda r: safe_div(r.get("likes",0), r.get("views",1)), axis=1)
+        d["comments_per_view"] = d.apply(lambda r: safe_div(r.get("comments",0), r.get("views",1)), axis=1)
+        d["engagement_rate"] = d.apply(lambda r: safe_div(r.get("likes",0)+r.get("comments",0), r.get("views",1)), axis=1)
+        
+        d["watch_time_per_view"] = d.apply(lambda r: safe_div(r.get("watch_time_minutes",0), r.get("views",1)), axis=1)
+        d["retention_rate"] = d.apply(lambda r: safe_div(r.get("watch_time_per_view",0), r.get("video_length_minutes",1)), axis=1)
+        d["retention_volume"] = d["retention_rate"] * d.get("views", 0)
+        return d
+
     if mode == "Single input":
         cols = st.columns(3)
         inputs = {}
-        for i, col_name in enumerate(feature_cols):
-            with cols[i % 3]:
-                if col_name in X_sample.select_dtypes(include=['object']).columns:
-                    # Categorical: show selectbox with unique values from sample (or known categories)
-                    # Ideally we should have saved the categories. For now, we assume user knows or we use a text input
-                    # Better: use the categories from the preprocessor if possible, or just text input
-                    inputs[col_name] = st.text_input(col_name, value="Unknown")
+        
+        # Base columns needed for feature engineering
+        base_cols = ["views", "likes", "comments", "watch_time_minutes", "video_length_minutes", "subscribers", "category", "device", "country"]
+        # Filter feature_cols to only show base columns + any other non-engineered ones
+        # We assume known engineered columns: likes_per_view, comments_per_view, engagement_rate, watch_time_per_view, retention_rate, retention_volume
+        engineered_cols = ["likes_per_view", "comments_per_view", "engagement_rate", "watch_time_per_view", "retention_rate", "retention_volume"]
+        
+        # Display inputs for necessary columns
+        # Note: If feature_cols contains other columns not in base, we should show them too.
+        display_cols = [c for c in feature_cols if c not in engineered_cols]
+        # Also ensure base_cols are present if they are needed for calculation but not in feature_cols (unlikely but possible)
+        # For simplicity, we just iterate through feature_cols and if it is engineered, we skip asking user.
+        # BUT we must ask for base cols if they are missing from feature_cols? 
+        # Actually our models trained on feature_cols. So we only need to provide feature_cols.
+        # If feature_cols HAS retention_volume, we need views, watch_time... to calculate it.
+        
+        # Let's ask for ALL base columns to be safe, then compute, then filter to feature_cols
+        for i, col_name in enumerate(base_cols):
+             with cols[i % 3]:
+                if col_name in ["category", "device", "country"]:
+                     inputs[col_name] = st.text_input(col_name, value="Unknown") # Simplified
                 else:
-                    inputs[col_name] = st.number_input(col_name, min_value=0.0, value=100.0, step=1.0)
-
+                     inputs[col_name] = st.number_input(col_name, min_value=0.0, value=100.0, step=1.0)
+        
         if st.button("Predict revenue"):
             # Create DataFrame
             x_new = pd.DataFrame([inputs])
@@ -599,10 +710,16 @@ else:
             for c in x_new.columns:
                 if c in X_sample.select_dtypes(include=[np.number]).columns:
                     x_new[c] = pd.to_numeric(x_new[c])
+            
+            # Compute engineered features
+            x_new = add_engineered_features(x_new)
+            
+            # Keep only required features
+            x_new_final = x_new[feature_cols]
 
-            if model_name == "OLS (statsmodels)" or model_name == "Gamma GLM (log)":
+            if model_name == "OLS (statsmodels)":
                 # Transform
-                x_new_proc = preprocessor.transform(x_new)
+                x_new_proc = preprocessor.transform(x_new_final)
                 try:
                     feature_names_out = preprocessor.get_feature_names_out()
                 except:
@@ -611,7 +728,7 @@ else:
                 x_sm = sm.add_constant(pd.DataFrame(x_new_proc, columns=feature_names_out), has_constant="add")
                 pred = models[model_name].predict(x_sm)[0]
             else:
-                pred = models[model_name].predict(x_new)[0]
+                pred = models[model_name].predict(x_new_final)[0]
 
             st.metric("Predicted ad_revenue_usd", f"{pred:,.2f}")
 
@@ -620,6 +737,25 @@ else:
         if file is not None:
             df_new = pd.read_csv(file)
             st.write("Preview:", df_new.head())
+            
+            # Apply feature engineering to uploaded CSV
+            try:
+                df_new = add_engineered_features(df_new)
+                st.success("Automatically calculated derived features (retention_volume, etc.)")
+            except Exception as e:
+                st.warning(f"Could not calculate derived features: {e}. Expecting raw columns like views, likes, watch_time_minutes.")
+            
+            # Handle Missing Values (Models cannot handle NaNs)
+            if df_new.isnull().sum().sum() > 0:
+                init_len = len(df_new)
+                df_new = df_new.dropna()
+                st.warning(f"⚠️ Dropped {init_len - len(df_new)} rows containing missing values (Model cannot handle NaNs).")
+                
+                if len(df_new) == 0:
+                    st.error("All rows were dropped due to missing values. Please check your CSV.")
+                    st.stop()
+            else:
+                st.success("No missing values found.")
 
             missing = [c for c in feature_cols if c not in df_new.columns]
             if missing:
@@ -628,7 +764,7 @@ else:
                 X_new = df_new[feature_cols] # DataFrame
 
                 if st.button("Predict revenue for all rows"):
-                    if model_name == "OLS (statsmodels)" or model_name == "Gamma GLM (log)":
+                    if model_name == "OLS (statsmodels)":
                         X_new_proc = preprocessor.transform(X_new)
                         try:
                             feature_names_out = preprocessor.get_feature_names_out()

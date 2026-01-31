@@ -1,66 +1,64 @@
-# Ad Revenue Modeling App
+# Ad Revenue Detection & Model Reconstruction
 
-This project is a Streamlit application for analyzing and predicting YouTube ad revenue based on various video metrics.
+## 🚀 Project Overview
+**Objective**: To reverse-engineer the hidden mathematical formula of YouTube's revenue system using advanced Linear Regression techniques.
+**Role**: A "Revenue Simulator" and forensic analysis tool for content creators.
 
-## Installation
+This project goes beyond simple prediction. It uses **Polynomial Transformers** and **Regularized Models (Lasso/Ridge)** to mathematically "crack" the platform's logic, moving from a naive 26% accuracy to **98% precision**.
 
-1.  **Clone or Download** the project repository.
-2.  **Create a Virtual Environment** (recommended):
+---
+
+## 📊 Key Findings (The "Detection")
+
+### 1. The "Cheat" Variable
+*   **Discovery**: Raw interaction metrics (Views, Likes, Comments) are **poor predictors** on their own (R² ≈ 0.26).
+*   **The Breakthrough**: `watch_time_minutes` acts as a "Data Leakage" variable with a **0.988 correlation** to revenue.
+*   **Conclusion**: Revenue is almost deterministically tied to **Duration** rather than just Volume.
+
+### 2. The "Polynomial Cracking"
+*   **Linear Failure**: Standard models failed to capture the exponential nature of viral revenue.
+*   **The Solution**: By applying a **Polynomial Transformer (Degree 2)**, the model reconstructed the non-linear "Duration-First" logic, boosting accuracy to **0.979**.
+
+### 3. Feature Engineering Wins
+*   **Retention Rate**: Identifying quality over quantity.
+*   **Interaction Terms**: `Views * Retention` proved to be the ultimate driver of income.
+
+---
+
+## 🛠️ Technical Architecture
+
+### The "Factory" Pipeline
+Information is processed through a strict Scikit-Learn pipeline to prevent Data Leakage:
+1.  **Preprocessing**: `ColumnTransformer` handles scaling (StandardScaler) and encoding (OneHotEncoder).
+2.  **Feature Engineering**: `PolynomialFeatures` creates interaction terms (e.g., `Views * Likes`).
+3.  **Target Transformation**: `TransformedTargetRegressor` with `func=np.log1p` handles the skewed "Power Law" distribution of financial data.
+
+### Model Suite
+*   **Linear Regression**: The Baseline.
+*   **Ridge/Lasso/ElasticNet**: Regularized models to handle **Multicollinearity** (Stable coefficients).
+*   **Gamma GLM**: Specialized for strictly positive, skewed financial data.
+*   **Statsmodels Wrapper**: Custom class to extract P-values and confidence intervals.
+
+---
+
+## 📦 Installation & Usage
+
+1.  **Clone the repository**:
     ```bash
-    python -m venv venv
+    git clone [repo_url]
     ```
-3.  **Activate the Virtual Environment**:
-    *   **Windows**:
-        ```powershell
-        .\venv\Scripts\Activate.ps1
-        ```
-    *   **Mac/Linux**:
-        ```bash
-        source venv/bin/activate
-        ```
-4.  **Install Dependencies**:
+2.  **Install requirements**:
     ```bash
     pip install -r requirements.txt
     ```
+3.  **Run the Streamlit App**:
+    ```bash
+    streamlit run app.py
+    ```
 
-## Dependencies
+---
 
-The main packages used in this project are:
-*   `streamlit`: For the web application interface.
-*   `pandas`: For data manipulation and analysis.
-*   `numpy`: For numerical operations.
-*   `scikit-learn`: For machine learning models (Linear Regression, Ridge, Lasso, ElasticNet).
-*   `statsmodels`: For statistical modeling (OLS, GLM).
-*   `plotly`: For interactive visualizations.
-*   `seaborn` & `matplotlib`: For static plotting.
-
-## Project Structure
-
-*   **`app.py`**: The main application file containing the Streamlit code, model training pipeline, and visualization logic.
-*   **`requirements.txt`**: A text file listing all the Python libraries required to run the app.
-*   **`youtube_ad_revenue_dataset.csv`**: The dataset file containing the video metrics and revenue data.
-*   **`models/`**: A directory where trained models and preprocessors are saved automatically.
-
-## Usage
-
-To run the application, execute the following command in your terminal (ensure your virtual environment is active):
-
-```bash
-streamlit run app.py
-```
-
-The app will open in your default web browser at `http://localhost:8501`.
-
-## Features
-
-### 1. Train & Evaluate
-*   **EDA**: View correlation matrices and target distributions.
-*   **Feature Engineering**: Automatically calculates metrics like `engagement_rate` and `retention_rate`.
-*   **Model Training**: Trains multiple models (Linear Regression, Ridge, Lasso, ElasticNet, OLS, Gamma GLM) with Cross-Validation.
-*   **Evaluation**: Compares models using R2 and RMSE scores.
-*   **Visualization**: Interactive plots for "Actual vs Predicted" and "Residuals".
-*   **Downloads**: Download predictions and trained model files (`.pkl`).
-
-### 2. Predict Revenue
-*   **Single Input**: Enter values for a single video to get a revenue prediction.
-*   **Batch Prediction**: Upload a CSV file to generate predictions for multiple videos at once.
+## 📂 Project Structure
+*   `app.py`: Main application with model pipeline and visualization.
+*   `YouTube_Project_Review.pptx`: Comprehensive presentation of findings.
+*   `PROJECT_REPORT.md` / `Codebase_Teacher_Guide.md`: Detailed technical documentation.
